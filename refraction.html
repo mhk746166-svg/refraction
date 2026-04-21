@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>상호작용 과학 - 빛의 굴절 (스피어 피싱)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Noto Sans KR', sans-serif; background-color: #0f172a; color: white; overflow: hidden; }
+        .water { fill: rgba(14, 165, 233, 0.3); }
+        .laser-line { stroke-dasharray: 5; animation: dash 1s linear infinite; }
+        @keyframes dash { to { stroke-dashoffset: -10; } }
+        .fish-actual { filter: grayscale(100%) opacity(0.3); }
+        .btn-press:active { transform: scale(0.95); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        const App = () => {
+            const [gameState, setGameState] = useState('intro'); // intro, play, result
+            const [mousePos, setMousePos] = useState({ x: 400, y: 100 });
+            const [fishPos, setFishPos] = useState({ x: 600, y: 500 });
+            const [score, setScore] = useState(0);
+            const [feedback, setFeedback] = useState(null);
+            
+            const canvasWidth = 800;
+            const canvasHeight = 600;
+            const waterLevel = 300; // 수면 높이
+            const n1 = 1.0; // 공기 굴절률
+            const n2 = 1.33; // 물 굴절률
+
+            // 물고기 랜덤 배치
+            const spawnFish = useCallback(() => {
+                setFishPos({
+                    x: 100 + Math.random() * 600,
+                    y: waterLevel + 50 + Math.random() * 200
+                });
+                setFeedback(null);
+            }, []);
+
+            // 굴절 계산 (스넬의 법칙)
+            const getRefraction = () => {
+                const dx = mousePos.x - 400; // 조준점(400, 0) 기준
+                const dy = waterLevel - 0;
+                const theta1 = Math.atan2(dx, dy);
+                
+                // sin(theta2) = n1/n2 * sin(theta1)
+                const sinTheta2 = (n1 / n2) * Math.sin(theta1);
+                const theta2 = Math.asin(sinTheta2);
+                
+                return { theta1, theta2 };
+            };
+
+            const { theta1, theta2 } = getRefraction();
+
+            // 보이는 물고기 위치 계산 (겉보기 깊이)
+            // 중2 수준에서는 "더 떠 보인다"는 개념만 전달
+            const apparentFishY = waterLevel + (fishPos.y - waterLevel) * (n1 / n2);
+
+            const handleThrow = () => {
+                // 작살의 최종 도달 지점 계산 (간단화)
+                const targetX = 400 + Math.tan(theta2) * (fishPos.y - waterLevel);
+                const distance = Math.abs(targetX - fishPos.x);
+
+                if (distance < 40) {
+                    setScore(s => s + 1);
+                    setFeedback({ success: true, msg: "명중! 굴절률을 잘 계산했군요!" });
+                    setTimeout(spawnFish, 1500);
+                } else {
+                    setFeedback({ success: false, msg: "빗나갔습니다! 물고기는 보이는 곳보다 아래에 있어요." });
+                }
+            };
+
+            return (
+                <div className="flex flex-col items-center justify-center min-h-screen p-4">
+                    <div className="relative w-[800px] h-[600px] bg-slate-900 rounded-3xl border-4 border-slate-700 overflow-hidden shadow-2xl">
+                        {/* 수면 */}
+                        <rect className="water w-full h-[300px] absolute bottom-0 left-0" />
+                        <div className="absolute top-[295px] w-full h-1 bg-cyan-400 opacity-50" />
+
+                        {/* 조준선 가이드 (SVG) */}
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                            <defs>
+                                <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#f8fafc" />
+                                </marker>
+                            </defs>
+                            
+                            {/* 법선 */}
+                            <line x1="400" y1="200" x2="400" y2="400" stroke="gray" strokeWidth="1" strokeDasharray="4" />
+                            <text x="410" y="220" fill="gray" fontSize="12">법선</text>
+
+                            {/* 입사광선 (작살 궤적 예측) */}
+                            <line x1="400" y1="0" x2={400 + Math.tan(theta1) * waterLevel} y2={waterLevel} stroke="#fbbf24" strokeWidth="3" />
+                            
+                            {/* 굴절광선 */}
+                            <line x1={400 + Math.tan(theta1) * waterLevel} y1={waterLevel} x2={400 + Math.tan(theta1) * waterLevel + Math.tan(theta2) * 300} y2={600} stroke="#22d3ee" strokeWidth="3" className="laser-line" />
+
+                            {/* 각도 표시 */}
+                            <text x="360" y="280" fill="#fbbf24" fontSize="14" fontWeight="bold">입사각</text>
+                            <text x="360" y="340" fill="#22d3ee" fontSize="14" fontWeight="bold">굴절각</text>
+                        </svg>
+
+                        {/* 실제 물고기 (정답 위치 - 반투명) */}
+                        <div 
+                            className="absolute w-16 h-12 fish-actual transition-all duration-500"
+                            style={{ left: fishPos.x - 32, top: fishPos.y - 24 }}
+                        >
+                            🐟 <span className="text-[10px] block">실제 위치</span>
+                        </div>
+
+                        {/* 보이는 물고기 (학생이 보는 위치 - 진함) */}
+                        <div 
+                            className="absolute w-16 h-12 text-4xl animate-bounce"
+                            style={{ left: fishPos.x - 32, top: apparentFishY - 24 }}
+                        >
+                            🐟
+                        </div>
+
+                        {/* UI 레이어 */}
+                        <div className="absolute top-6 left-6">
+                            <h1 className="text-2xl font-black text-cyan-400">물고기 작살질 게임</h1>
+                            <p className="text-slate-400 text-sm">빛의 굴절 때문에 물고기가 떠 보입니다!</p>
+                        </div>
+
+                        <div className="absolute top-6 right-6 bg-slate-800/80 px-4 py-2 rounded-xl border border-slate-600">
+                            <span className="text-yellow-400 font-bold text-xl">Score: {score}</span>
+                        </div>
+
+                        {feedback && (
+                            <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 p-6 rounded-2xl border-2 backdrop-blur-md text-center animate-bounce ${feedback.success ? 'bg-green-500/20 border-green-500' : 'bg-red-500/20 border-red-500'}`}>
+                                <p className="text-xl font-bold">{feedback.msg}</p>
+                            </div>
+                        )}
+
+                        <div className="absolute bottom-8 w-full flex justify-center">
+                            <button 
+                                onClick={handleThrow}
+                                className="btn-press px-10 py-4 bg-gradient-to-r from-orange-500 to-red-600 rounded-full font-black text-xl shadow-lg hover:shadow-red-500/50"
+                            >
+                                🔱 작살 던지기!
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="mt-6 text-slate-400 text-center max-w-md">
+                        <p>마우스를 움직여 조준하세요. <br/><strong>입사각</strong>이 커질수록 <strong>굴절각</strong>도 함께 커지는 것을 확인하세요!</p>
+                    </div>
+
+                    {/* 마우스 트래킹용 투명 레이어 */}
+                    <div 
+                        className="fixed inset-0 z-0"
+                        onMouseMove={(e) => setMousePos({ x: e.clientX, y: e.clientY })}
+                    />
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
