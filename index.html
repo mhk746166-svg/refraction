@@ -3,18 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>상호작용 과학 - 빛의 굴절 v2.0</title>
+    <title>빛의 굴절 시뮬레이션 - 스피어 피싱</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Noto Sans KR', sans-serif; background-color: #0f172a; color: white; touch-action: none; }
-        .water { fill: #0c4a6e; fill-opacity: 0.6; }
-        .spear-animate { transition: all 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
-        .btn-press:active { transform: scale(0.9); }
-        .guide-text { pointer-events: none; user-select: none; }
+        body { font-family: 'Noto Sans KR', sans-serif; background-color: #0f172a; color: white; margin: 0; overflow: hidden; }
+        .water { fill: #0c4a6e; fill-opacity: 0.7; }
+        .btn-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3); }
+        .btn-active:active { transform: translateY(0); scale: 0.95; }
+        @keyframes spear-fly {
+            0% { transform: translate(0, 0) rotate(var(--rot)); opacity: 1; }
+            100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)); opacity: 1; }
+        }
+        .spear-animation {
+            animation: spear-fly 0.5s ease-out forwards;
+        }
     </style>
 </head>
 <body>
@@ -24,148 +30,150 @@
         const { useState, useEffect, useRef } = React;
 
         const App = () => {
-            const [angle, setAngle] = useState(30); // 입사각 (degree)
+            const [angle, setAngle] = useState(30); 
             const [fishPos, setFishPos] = useState({ x: 550, y: 450 });
-            const [score, setScore] = useState(0);
             const [isFiring, setIsFiring] = useState(false);
-            const [result, setResult] = useState(null);
-            
-            const n1 = 1.0; // 공기
-            const n2 = 1.33; // 물
-            const waterLevel = 300;
-            const pivotX = 400;
+            const [spearPath, setSpearPath] = useState(null);
+            const [score, setScore] = useState(0);
+            const [message, setMessage] = useState(null);
 
-            // 굴절각 계산 (스넬의 법칙: n1*sin(t1) = n2*sin(t2))
+            const n1 = 1.0; // 공기
+            const n2 = 1.5; // 물 (굴절을 더 잘 보이게 1.5로 상향)
+            const waterLevel = 300;
+            const pivotX = 400; // 입사점 고정
+
+            // 굴절각 계산
             const theta1Rad = (angle * Math.PI) / 180;
             const sinTheta2 = (n1 / n2) * Math.sin(theta1Rad);
             const theta2Rad = Math.asin(sinTheta2);
             const angle2 = (theta2Rad * 180) / Math.PI;
 
-            // 보이는 물고기 위치 (더 떠 보임)
+            // 보이는 물고기 위치 (겉보기 깊이)
             const apparentY = waterLevel + (fishPos.y - waterLevel) * (n1 / n2);
 
-            const handleMouseDown = (e) => {
+            // 각도 조절 (슬라이더나 마우스 이동 대신 직접 드래그)
+            const handleMouseMove = (e) => {
                 if (isFiring) return;
-                updateAngle(e.clientX);
-                const moveHandler = (me) => updateAngle(me.clientX);
-                const upHandler = () => {
-                    window.removeEventListener('mousemove', moveHandler);
-                    window.removeEventListener('mouseup', upHandler);
-                };
-                window.addEventListener('mousemove', moveHandler);
-                window.addEventListener('mouseup', upHandler);
-            };
-
-            const updateAngle = (mouseX) => {
-                const dx = mouseX - (window.innerWidth / 2);
-                let newAngle = Math.atan2(dx, waterLevel) * (180 / Math.PI);
-                setAngle(Math.max(-60, Math.min(60, newAngle)));
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                if (y < waterLevel) { // 수면 위에서만 조절 가능
+                    const dx = x - pivotX;
+                    const dy = waterLevel - y;
+                    let newAngle = Math.atan2(dx, dy) * (180 / Math.PI);
+                    setAngle(Math.max(-70, Math.min(70, newAngle)));
+                }
             };
 
             const fireSpear = () => {
                 if (isFiring) return;
                 setIsFiring(true);
                 
-                // 작살의 물속 최종 X 위치 계산
-                const spearXAtFishY = pivotX + Math.tan(theta1Rad) * waterLevel + Math.tan(theta2Rad) * (fishPos.y - waterLevel);
-                const hit = Math.abs(spearXAtFishY - fishPos.x) < 40;
+                // 작살은 굴절되지 않고 직선으로 날아감 (물리적 핵심)
+                const targetX = pivotX + Math.tan(theta1Rad) * (fishPos.y);
+                const hit = Math.abs(targetX - fishPos.x) < 40;
+
+                setSpearPath({
+                    tx: Math.tan(theta1Rad) * 600,
+                    ty: 600,
+                    rot: angle
+                });
 
                 setTimeout(() => {
                     if (hit) {
                         setScore(s => s + 1);
-                        setResult("명중!");
+                        setMessage("🎯 명중! 실제 위치를 잘 겨냥했네요!");
                     } else {
-                        setResult("실패! 보이는 곳보다 더 아래를 조준하세요.");
+                        setMessage("❌ 실패! 보이는 것보다 더 깊이 던지세요.");
                     }
                 }, 500);
 
                 setTimeout(() => {
                     setIsFiring(false);
-                    setResult(null);
+                    setSpearPath(null);
+                    setMessage(null);
                     setFishPos({ x: 150 + Math.random() * 500, y: 350 + Math.random() * 200 });
                 }, 2000);
             };
 
             return (
-                <div className="flex flex-col items-center justify-center min-h-screen select-none">
+                <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-slate-950">
                     <div className="mb-4 text-center">
-                        <h1 className="text-3xl font-black text-cyan-400">물고기 작살질 v2.0</h1>
-                        <p className="text-slate-400">화면을 드래그하여 각도를 조절하고 버튼을 누르세요!</p>
+                        <h1 className="text-3xl font-black text-cyan-400">물고기 작살질 v2.5</h1>
+                        <p className="text-slate-400">수면 위에서 마우스를 움직여 조준하고 버튼을 누르세요!</p>
                     </div>
 
                     <div 
-                        className="relative w-[800px] h-[600px] bg-slate-800 rounded-xl overflow-hidden cursor-crosshair shadow-2xl border-4 border-slate-700"
-                        onMouseDown={handleMouseDown}
+                        className="relative w-[800px] h-[600px] bg-slate-900 rounded-2xl overflow-hidden border-4 border-slate-800 shadow-2xl"
+                        onMouseMove={handleMouseMove}
                     >
-                        {/* 물/공기 배경 */}
-                        <div className="absolute top-0 w-full h-[300px] bg-slate-900" />
-                        <rect className="water w-full h-[300px] absolute bottom-0" />
+                        {/* 물 배경 */}
+                        <div className="absolute bottom-0 w-full h-[300px] bg-sky-900/40" />
                         
                         <svg className="absolute inset-0 w-full h-full pointer-events-none">
                             {/* 법선 */}
-                            <line x1={pivotX} y1="50" x2={pivotX} y2="550" stroke="#64748b" strokeWidth="2" strokeDasharray="8,4" />
-                            <text x={pivotX + 10} y="70" fill="#64748b" fontSize="14">법선</text>
+                            <line x1={pivotX} y1="0" x2={pivotX} y2="600" stroke="#64748b" strokeWidth="2" strokeDasharray="10,5" />
+                            <text x={pivotX + 10} y="40" fill="#64748b" className="text-xs">법선</text>
 
-                            {/* 입사각 Arc */}
-                            <path d={`M ${pivotX} ${waterLevel - 50} A 50 50 0 0 ${angle > 0 ? 1 : 0} ${pivotX + Math.sin(theta1Rad)*50} ${waterLevel - Math.cos(theta1Rad)*50}`} fill="none" stroke="#fbbf24" strokeWidth="2" />
-                            <text x={pivotX + (angle > 0 ? 20 : -50)} y={waterLevel - 60} fill="#fbbf24" fontWeight="bold">{Math.abs(Math.round(angle))}°</text>
-
-                            {/* 굴절각 Arc */}
-                            <path d={`M ${pivotX} ${waterLevel + 50} A 50 50 0 0 ${angle > 0 ? 0 : 1} ${pivotX + Math.sin(theta2Rad)*50} ${waterLevel + Math.cos(theta2Rad)*50}`} fill="none" stroke="#22d3ee" strokeWidth="2" />
-                            <text x={pivotX + (angle > 0 ? 15 : -45)} y={waterLevel + 75} fill="#22d3ee" fontWeight="bold">{Math.abs(Math.round(angle2))}°</text>
-
-                            {/* 광선 경로 */}
-                            <line x1={pivotX} y1="0" x2={pivotX + Math.tan(theta1Rad) * waterLevel} y2={waterLevel} stroke="#fbbf24" strokeWidth="4" />
-                            <line x1={pivotX + Math.tan(theta1Rad) * waterLevel} y1={waterLevel} x2={pivotX + Math.tan(theta1Rad) * waterLevel + Math.tan(theta2Rad) * 300} y2="600" stroke="#22d3ee" strokeWidth="4" strokeDasharray={isFiring ? "0" : "4"} />
+                            {/* 빛의 경로 (굴절 시각화) */}
+                            <line x1={pivotX - Math.tan(theta1Rad)*300} y1="0" x2={pivotX} y2={waterLevel} stroke="#fbbf24" strokeWidth="2" opacity="0.5" />
+                            <line x1={pivotX} y1={waterLevel} x2={pivotX + Math.tan(theta2Rad)*300} y2="600" stroke="#22d3ee" strokeWidth="4" />
+                            
+                            {/* 각도 표시 */}
+                            <text x={pivotX + (angle > 0 ? 20 : -60)} y={waterLevel - 20} fill="#fbbf24" className="font-bold">입사각 {Math.abs(Math.round(angle))}°</text>
+                            <text x={pivotX + (angle > 0 ? 20 : -60)} y={waterLevel + 40} fill="#22d3ee" className="font-bold">굴절각 {Math.abs(Math.round(angle2))}°</text>
                         </svg>
 
-                        {/* 물고기들 */}
-                        <div className="absolute transition-all duration-700" style={{ left: fishPos.x - 30, top: fishPos.y - 20, opacity: 0.2 }}>
+                        {/* 실제 물고기 (조준 대상) */}
+                        <div className="absolute transition-all duration-500" style={{ left: fishPos.x - 30, top: fishPos.y - 20, opacity: 0.3 }}>
                             <span className="text-4xl">🐟</span>
-                            <span className="block text-[10px] text-white text-center">실제 위치</span>
+                            <span className="block text-[10px] text-center font-bold">실제 위치</span>
                         </div>
+
+                        {/* 보이는 물고기 (착시) */}
                         <div className="absolute animate-bounce" style={{ left: fishPos.x - 30, top: apparentY - 20 }}>
                             <span className="text-5xl">🐟</span>
+                            <span className="block text-[10px] text-center text-cyan-400 font-bold">보이는 위치</span>
                         </div>
 
                         {/* 작살 애니메이션 */}
-                        {isFiring && (
+                        {spearPath && (
                             <div 
-                                className="absolute text-4xl spear-animate"
+                                className="absolute text-5xl spear-animation"
                                 style={{ 
-                                    left: pivotX - 20, 
-                                    top: -40,
-                                    transform: `translate(${Math.tan(theta1Rad) * waterLevel + Math.tan(theta2Rad) * 300}px, 600px) rotate(${angle2}deg)`
-                                }}
+                                    left: pivotX - 24, 
+                                    top: 0,
+                                    '--tx': `${spearPath.tx}px`,
+                                    '--ty': `${spearPath.ty}px`,
+                                    '--rot': `${spearPath.rot}deg`
+                                } as any}
                             >
                                 🔱
                             </div>
                         )}
 
-                        {/* 결과 메시지 */}
-                        {result && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                                <div className={`text-3xl font-black p-8 rounded-2xl border-4 ${result === "명중!" ? "bg-green-500/20 border-green-500 text-green-400" : "bg-red-500/20 border-red-500 text-red-400"}`}>
-                                    {result}
+                        {message && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-md">
+                                <div className="text-3xl font-black p-10 rounded-3xl border-4 border-white shadow-2xl animate-scale">
+                                    {message}
                                 </div>
                             </div>
                         )}
                     </div>
 
-                    {/* 하단 컨트롤러 */}
-                    <div className="mt-8 flex gap-8 items-center bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
+                    <div className="mt-6 flex items-center gap-10 bg-slate-900 p-6 rounded-3xl border border-slate-700">
                         <div className="text-center">
-                            <p className="text-slate-400 text-xs mb-1">현재 스코어</p>
-                            <p className="text-3xl font-black text-yellow-400">{score}</p>
+                            <p className="text-slate-500 text-xs font-bold uppercase tracking-widest">Score</p>
+                            <p className="text-4xl font-black text-yellow-400">{score}</p>
                         </div>
-                        <div className="h-12 w-[1px] bg-slate-700" />
+                        
                         <button 
-                            onMouseDown={(e) => e.stopPropagation()} 
-                            onClick={fireSpear}
+                            onClick={(e) => { e.stopPropagation(); fireSpear(); }}
                             disabled={isFiring}
-                            className={`px-12 py-4 rounded-xl font-black text-xl text-white transition-all btn-press ${isFiring ? "bg-slate-600 cursor-not-allowed" : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 shadow-[0_0_20px_rgba(6,182,212,0.4)]"}`}
+                            className={`px-16 py-5 rounded-2xl font-black text-2xl text-white transition-all btn-hover btn-active ${isFiring ? 'bg-slate-700' : 'bg-gradient-to-br from-orange-500 to-red-600 shadow-lg shadow-orange-900/20'}`}
                         >
-                            {isFiring ? "던지는 중..." : "🔱 작살 던지기"}
+                            {isFiring ? "발사 중..." : "🔱 작살 던지기"}
                         </button>
                     </div>
                 </div>
