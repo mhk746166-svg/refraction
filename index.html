@@ -1,140 +1,640 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <title>빛의 굴절 - 스피어 피싱 시뮬레이션</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Noto Sans KR', sans-serif; background-color: #0f172a; color: white; overflow: hidden; touch-action: none; }
-        .water { fill: #0c4a6e; fill-opacity: 0.8; }
-        .btn-active:active { transform: scale(0.95); }
-        @keyframes spear-fly {
-            0% { transform: translate(0, 0) rotate(var(--rot)); opacity: 1; }
-            100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)); opacity: 1; }
-        }
-        .spear-fly { animation: spear-fly 0.6s cubic-bezier(0.1, 0, 0.3, 1) forwards; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0c1e3a">
+<title>상호작용형 과학 시뮬레이션 - 빛의 굴절 (작살 낚시)</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700;900&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: {
+      fontFamily: { sans: ['"Noto Sans KR"', 'sans-serif'] },
+      colors: {
+        sky1: '#60a5fa', sky2: '#3b82f6',
+        water1: '#0891b2', water2: '#075985',
+        sandy: '#facc15',
+        darkBg: '#0b1220',
+      }
+    }}
+  }
+</script>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<style>
+  body { background:#0b1220; color:#f8fafc; overflow-x:hidden; -webkit-tap-highlight-color:transparent; }
+  .glass { background:rgba(15,23,42,.72); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+           border:1px solid rgba(255,255,255,.1); box-shadow:0 4px 30px rgba(0,0,0,.5); }
+  .btn-press { transition: transform .1s cubic-bezier(.4,0,.2,1); }
+  .btn-press:active { transform: scale(.95); }
+  @keyframes fadeInUp { from{opacity:0; transform:translateY(10px)} to{opacity:1; transform:translateY(0)} }
+  .fadeInUp { animation: fadeInUp .4s ease-out both; }
+  @keyframes wobble { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
+  .wobble { animation: wobble 2s ease-in-out infinite; }
+  @keyframes pulseRing { 0%{transform:scale(1);opacity:.9} 70%{transform:scale(1.6);opacity:0} 100%{opacity:0} }
+  .pulseRing { animation: pulseRing 1.4s ease-out infinite; transform-origin:center; }
+  @keyframes drawLine { to { stroke-dashoffset:0 } }
+  .drawLine { stroke-dasharray: 800; stroke-dashoffset: 800; animation: drawLine 1s ease-out forwards; }
+
+  .wave { animation: waveMove 6s linear infinite; }
+  @keyframes waveMove { 0%{transform:translateX(0)} 100%{transform:translateX(-40px)} }
+
+  .fish-swim { animation: swim 3s ease-in-out infinite; transform-origin:center; }
+  @keyframes swim { 0%,100%{transform: translateX(0) rotate(0deg)} 50%{transform: translateX(6px) rotate(-3deg)} }
+</style>
 </head>
-<body>
-    <div id="root"></div>
-    <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
+<body class="font-sans">
+<div id="root"></div>
 
-        const App = () => {
-            const [angle, setAngle] = useState(30); 
-            const [isDragging, setIsDragging] = useState(false);
-            const [fishPos, setFishPos] = useState({ x: 580, y: 480 });
-            const [isFiring, setIsFiring] = useState(false);
-            const [spearData, setSpearData] = useState(null);
-            const [score, setScore] = useState(0);
-            const [msg, setMsg] = useState(null);
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
-            const n1 = 1.0, n2 = 1.5, waterLevel = 300, pivotX = 400;
+/* ───── 레벨 데이터 ─────
+   좌표계: SVG viewBox 640 × 440
+   수면 y = 180.   눈(관찰자) 위치 & 물고기 실제 위치를 정의.
+   n = 1.33 (물 굴절률)  — 중2 수준: "공기→물로 갈 때 빛이 법선쪽으로 꺾임"만 강조
+*/
+const VB_W = 640, VB_H = 440, WATER_Y = 180;
+const N_WATER = 1.33;
 
-            const getAngles = (deg) => {
-                const r1 = (deg * Math.PI) / 180;
-                const r2 = Math.asin((n1 / n2) * Math.sin(r1));
-                return { r1, r2, d2: (r2 * 180) / Math.PI };
-            };
+const LEVELS = [
+  {
+    id:1, title:"튜토리얼 · 바로 위에서 보기",
+    hint:"수면에 거의 수직으로 내려다보면 착시가 거의 없어요. 우선 '보이는 곳'에 던져 보세요.",
+    eye:{x:180, y:80}, fish:{x:200, y:340}, tol:24, moving:false,
+  },
+  {
+    id:2, title:"비스듬히 보기",
+    hint:"이제 비스듬히 봐요. 빛이 수면에서 꺾여 들어오기 때문에 물고기가 실제보다 '떠' 보입니다. 보이는 곳보다 더 깊은 곳으로!",
+    eye:{x:120, y:70}, fish:{x:420, y:330}, tol:22, moving:false,
+  },
+  {
+    id:3, title:"깊은 물 · 더 큰 착시",
+    hint:"물고기가 깊을수록 겉보기 위치와 실제 위치의 차이가 커져요.",
+    eye:{x:100, y:70}, fish:{x:460, y:390}, tol:22, moving:false,
+  },
+  {
+    id:4, title:"긴 사정거리 · 큰 입사각",
+    hint:"입사각이 커질수록 굴절각도 커지고, 착시도 커집니다. 신중하게 조준!",
+    eye:{x:80, y:70}, fish:{x:540, y:360}, tol:20, moving:false,
+  },
+  {
+    id:5, title:"도전 · 움직이는 물고기",
+    hint:"물고기가 움직여요. 겉보기 위치만 쫓아가면 영영 못 잡습니다. 실제 위치를 예측!",
+    eye:{x:110, y:70}, fish:{x:400, y:360}, tol:24, moving:true, range:80, speed:0.8,
+  },
+];
 
-            const { r1, r2, d2 } = getAngles(angle);
-            const apparentY = waterLevel + (fishPos.y - waterLevel) * (n1 / n2);
+const QUIZ = [
+  { q:"빛이 공기에서 물로 들어갈 때 경계면에서 꺾이는 현상을 '굴절'이라고 한다.", a:"O" },
+  { q:"작살로 물고기를 잡으려면 '보이는 물고기'를 그대로 조준해야 정확히 맞는다.", a:"X" }, // 더 아래를 조준
+  { q:"입사각이 커지면 굴절각도 커진다.", a:"O" },
+  { q:"물속의 물고기는 실제 위치보다 얕은 곳(더 위)에 있는 것처럼 보인다.", a:"O" },
+  { q:"작살(물체)은 빛과 달리 물속에서도 거의 직선으로 나아간다.", a:"O" },
+];
 
-            const handleMove = (e) => {
-                if (!isDragging || isFiring) return;
-                const rect = e.currentTarget.getBoundingClientRect();
-                const dx = (e.clientX || e.touches[0].clientX) - rect.left - pivotX;
-                const dy = waterLevel - ((e.clientY || e.touches[0].clientY) - rect.top);
-                if (dy > 10) setAngle(Math.max(-75, Math.min(75, Math.atan2(dx, dy) * (180 / Math.PI))));
-            };
+/* ───── 굴절 계산 유틸 ─────
+   스넬의 법칙: n1 sinθ1 = n2 sinθ2.  (공기 n1=1, 물 n2=1.33)
+   눈과 실제 물고기 사이에서 수면 위의 굴절점 P를 이분탐색으로 찾음.
+   겉보기 위치 = 눈에서 P로 그린 직선을 연장하고, 실제 물고기의 x 좌표에서의 그 직선의 y.
+   (간단화: 교과서적으로 "겉보기는 실제의 바로 위쪽에 있다"는 걸 따름 — 같은 x에서 더 얕은 y) */
+function findRefractionPoint(eye, fish) {
+  // Fermat: 굴절점 P를 수면(y=WATER_Y) 위에서 찾는다.
+  // P.x는 eye.x ~ fish.x 사이. 이분탐색으로 스넬의 법칙 만족하는 x를 찾음.
+  let lo = Math.min(eye.x, fish.x) - 5;
+  let hi = Math.max(eye.x, fish.x) + 5;
+  for (let i=0; i<60; i++) {
+    const mid = (lo+hi)/2;
+    // P=(mid, WATER_Y) 에서 위쪽 광선(공기): P→eye, 아래쪽 광선(물): P→fish
+    const dxA = eye.x - mid, dyA = WATER_Y - eye.y;        // eye는 위쪽
+    const dxW = fish.x - mid, dyW = fish.y - WATER_Y;      // fish는 아래쪽
+    const sinA = dxA / Math.hypot(dxA, dyA);               // 법선(수직)과의 사인
+    const sinW = dxW / Math.hypot(dxW, dyW);
+    // 스넬: sinA = n * sinW  → 오차 = sinA - n*sinW. 0이 되도록.
+    const err = sinA - N_WATER * sinW;
+    // err가 양수면 공기쪽 각이 너무 큼 → P.x를 eye쪽으로 옮겨야 함 (줄임)
+    // 근데 부호는 eye, fish의 상대 위치에 따라 다름. 경험적으로:
+    if (err > 0) hi = mid; else lo = mid;
+  }
+  return { x:(lo+hi)/2, y:WATER_Y };
+}
 
-            const fire = () => {
-                if (isFiring) return;
-                setIsFiring(true);
-                // 작살은 입사각 방향 그대로 직선 운동
-                const finalX = pivotX + Math.tan(r1) * 600;
-                const hitX = pivotX + Math.tan(r1) * fishPos.y;
-                const isHit = Math.abs(hitX - fishPos.x) < 45;
+function computeApparent(eye, fish) {
+  const P = findRefractionPoint(eye, fish);
+  // 겉보기: 눈→P 직선을 연장하여 fish.x 위치에서의 y
+  const dx = P.x - eye.x, dy = P.y - eye.y;
+  if (Math.abs(dx) < 1e-6) {
+    // 수직 관찰
+    return { x: fish.x, y: WATER_Y + (fish.y - WATER_Y)/N_WATER, P };
+  }
+  const t = (fish.x - eye.x) / dx;
+  const yApp = eye.y + t * dy;
+  return { x: fish.x, y: yApp, P };
+}
 
-                setSpearData({ tx: Math.tan(r1) * 600, ty: 600, rot: angle });
+function angleDeg(sin) { return Math.asin(Math.max(-1,Math.min(1,sin))) * 180/Math.PI; }
 
-                setTimeout(() => {
-                    if (isHit) { setScore(s => s + 1); setMsg("🎯 명중! 빛은 꺾이지만 작살은 직선으로 가죠!"); }
-                    else { setMsg("❌ 빗나감! 보이는 물고기는 가짜(상)입니다."); }
-                }, 600);
+/* ───── 메인 앱 ───── */
+function App() {
+  const [screen, setScreen] = useState('intro'); // intro | play | quiz | end
+  const [levelIdx, setLevelIdx] = useState(0);
+  const [cleared, setCleared] = useState([]);
+  const [quizIdx, setQuizIdx] = useState(0);
+  const [quizScore, setQuizScore] = useState(0);
+  const [quizAnswers, setQuizAnswers] = useState([]);
 
-                setTimeout(() => {
-                    setIsFiring(false); setSpearData(null); setMsg(null);
-                    setFishPos({ x: 150 + Math.random() * 500, y: 350 + Math.random() * 200 });
-                }, 2500);
-            };
+  const startGame = () => { setScreen('play'); setLevelIdx(0); setCleared([]); };
 
-            return (
-                <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-slate-950" 
-                     onMouseMove={handleMove} onTouchMove={handleMove} onMouseUp={() => setIsDragging(false)} onTouchEnd={() => setIsDragging(false)}>
-                    
-                    <div className="mb-6 text-center">
-                        <h1 className="text-3xl font-black text-cyan-400 mb-2">스피어 피싱: 굴절의 함정</h1>
-                        <p className="text-slate-400 text-sm">노란색 광선을 드래그하여 조준하세요! (작살은 직선으로 날아갑니다)</p>
-                    </div>
+  const onClear = (id) => {
+    if (!cleared.includes(id)) setCleared(c => [...c, id]);
+    if (levelIdx + 1 < LEVELS.length) {
+      setLevelIdx(levelIdx+1);
+    } else {
+      setScreen('quiz'); setQuizIdx(0); setQuizScore(0); setQuizAnswers([]);
+    }
+  };
 
-                    <div className="relative w-[800px] h-[600px] bg-slate-900 rounded-3xl overflow-hidden border-4 border-slate-800 shadow-2xl">
-                        <div className="absolute bottom-0 w-full h-[300px] bg-sky-900/30" />
-                        
-                        <svg className="absolute inset-0 w-full h-full" onMouseDown={() => setIsDragging(true)} onTouchStart={() => setIsDragging(true)}>
-                            <line x1={pivotX} y1="0" x2={pivotX} y2="600" stroke="#475569" strokeWidth="2" strokeDasharray="10,5" />
-                            {/* 입사광 (조절 가능) */}
-                            <line x1={pivotX - Math.tan(r1)*300} y1="0" x2={pivotX} y2={waterLevel} stroke="#fbbf24" strokeWidth={isDragging ? 6 : 4} className="cursor-pointer" />
-                            <circle cx={pivotX - Math.tan(r1)*300} cy="0" r="8" fill="#fbbf24" className="animate-pulse" />
-                            
-                            {/* 굴절광 (학생이 보는 경로) */}
-                            <line x1={pivotX} y1={waterLevel} x2={pivotX + Math.tan(r2)*400} y2={waterLevel + 400} stroke="#22d3ee" strokeWidth="3" opacity="0.6" />
-                            
-                            <text x={pivotX + (angle > 0 ? 15 : -85)} y={waterLevel - 20} fill="#fbbf24" className="font-bold text-sm">입사각 {Math.abs(Math.round(angle))}°</text>
-                            <text x={pivotX + (angle > 0 ? 15 : -85)} y={waterLevel + 40} fill="#22d3ee" className="font-bold text-sm">굴절각 {Math.abs(Math.round(d2))}°</text>
-                        </svg>
+  const submitQuiz = (ans) => {
+    const correct = ans === QUIZ[quizIdx].a;
+    setQuizAnswers(prev => [...prev, {idx:quizIdx, ans, correct}]);
+    if (correct) setQuizScore(s => s+1);
+    if (quizIdx+1 < QUIZ.length) setQuizIdx(quizIdx+1);
+    else setScreen('end');
+  };
 
-                        {/* 물고기: 실제(조준대상) vs 보이는 것(착시) */}
-                        <div className="absolute transition-all duration-500" style={{ left: fishPos.x - 30, top: fishPos.y - 20, opacity: 0.25 }}>
-                            <span className="text-4xl">🐟</span>
-                            <p className="text-[10px] text-center font-bold text-white">실제 위치</p>
-                        </div>
-                        <div className="absolute animate-bounce" style={{ left: fishPos.x - 30, top: apparentY - 20 }}>
-                            <span className="text-5xl">🐟</span>
-                            <p className="text-[10px] text-center font-bold text-cyan-400">보이는 위치(상)</p>
-                        </div>
+  return (
+    <div className="min-h-screen w-full flex flex-col items-center justify-start py-6 px-3">
+      <div className="w-full max-w-3xl">
+        {screen==='intro' && <IntroScreen onStart={startGame} />}
+        {screen==='play' && (
+          <GameScreen
+            level={LEVELS[levelIdx]}
+            levelIdx={levelIdx}
+            totalLevels={LEVELS.length}
+            onClear={onClear}
+            onBack={()=>setScreen('intro')}
+          />
+        )}
+        {screen==='quiz' && (
+          <QuizScreen idx={quizIdx} total={QUIZ.length} item={QUIZ[quizIdx]} onAnswer={submitQuiz} />
+        )}
+        {screen==='end' && (
+          <EndScreen score={quizScore} total={QUIZ.length} answers={quizAnswers}
+                     onRestart={()=>setScreen('intro')} />
+        )}
+      </div>
+      <footer className="mt-8 text-xs text-slate-500">© 과학 시뮬레이션 · 빛의 굴절 편</footer>
+    </div>
+  );
+}
 
-                        {spearData && (
-                            <div className="absolute text-5xl spear-fly" style={{ left: pivotX - 24, top: waterLevel - 40, '--tx': `${spearData.tx}px`, '--ty': `${spearData.ty}px`, '--rot': `${spearData.rot}deg` } as any}>🔱</div>
-                        )}
+/* ───── 인트로 ───── */
+function IntroScreen({onStart}) {
+  return (
+    <div className="glass rounded-2xl p-6 md:p-10 fadeInUp text-center">
+      <h1 className="text-3xl md:text-4xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-sky-500 tracking-tight">
+        🐟 작살 낚시 · 빛의 굴절 퍼즐
+      </h1>
+      <p className="text-slate-300 mb-6 font-light">Refraction of Light Simulation</p>
 
-                        {msg && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm z-50">
-                                <div className="text-2xl font-black p-10 rounded-3xl border-4 border-slate-600 bg-slate-800 shadow-2xl text-center">
-                                    {msg}
-                                </div>
-                            </div>
-                        )}
-                    </div>
+      <div className="text-left space-y-4 text-slate-200 text-sm md:text-base">
+        <p><strong>🎯 실험 목표:</strong> 빛이 공기→물로 들어갈 때 꺾이는 <strong className="text-cyan-300">굴절</strong> 때문에,
+           물속 물고기가 <strong className="text-yellow-300">실제보다 얕은 곳</strong>에 있는 것처럼 보이는 현상을 체험해 봅시다.</p>
+        <p><strong>🕹️ 진행 방법:</strong><br/>
+           ① 물고기를 향해 화면을 <strong>클릭/터치</strong>해서 조준점을 놓으세요.<br/>
+           ② 아래 <strong>[작살 던지기]</strong> 버튼을 누르면 작살이 직선으로 날아갑니다.<br/>
+           ③ 작살은 물체라서 꺾이지 않아요. 눈에 <strong className="text-yellow-300">보이는 위치</strong>가 아니라
+               <strong className="text-cyan-300"> 실제 위치</strong>를 맞춰야 성공!</p>
+        <div className="bg-slate-800/70 p-4 rounded-lg border border-slate-700 text-sm space-y-1">
+          <p>💡 <strong>핵심 개념</strong> (중2 과정)</p>
+          <p>· 빛이 다른 매질로 들어가며 진행 경로가 꺾이는 현상 = <strong>굴절</strong></p>
+          <p>· <strong>입사각이 커질수록 굴절각도 커짐</strong></p>
+          <p>· 공기→물: 법선 쪽으로 꺾임 / 물속 물체는 실제보다 떠 보임</p>
+        </div>
+      </div>
 
-                    <div className="mt-8 flex items-center gap-10">
-                        <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 text-center min-w-[120px]">
-                            <p className="text-slate-500 text-xs font-bold uppercase">Score</p>
-                            <p className="text-4xl font-black text-yellow-400">{score}</p>
-                        </div>
-                        <button onClick={fire} disabled={isFiring || isDragging} className={`px-20 py-6 rounded-2xl font-black text-2xl text-white transition-all btn-active ${isFiring || isDragging ? 'bg-slate-800 text-slate-600' : 'bg-gradient-to-r from-orange-500 to-red-600 shadow-xl shadow-orange-900/20 hover:brightness-110'}`}>
-                            {isFiring ? "발사됨!" : "🔱 작살 발사"}
-                        </button>
-                    </div>
-                </div>
-            );
-        };
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
+      <button onClick={onStart}
+        className="mt-8 btn-press w-full md:w-auto px-10 py-4 rounded-xl font-bold text-lg
+                   bg-gradient-to-r from-cyan-500 to-sky-600 hover:from-cyan-400 hover:to-sky-500
+                   shadow-lg shadow-cyan-900/50">
+        🚀 시작하기
+      </button>
+    </div>
+  );
+}
+
+/* ───── 게임 화면 ───── */
+function GameScreen({level, levelIdx, totalLevels, onClear, onBack}) {
+  // 움직이는 물고기용 시간
+  const [t, setT] = useState(0);
+  useEffect(() => {
+    if (!level.moving) return;
+    let raf, start = performance.now();
+    const tick = (now) => { setT((now-start)/1000); raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [level.moving]);
+
+  // 현재 물고기 위치
+  const fish = useMemo(() => {
+    if (!level.moving) return level.fish;
+    const dx = Math.sin(t * level.speed) * level.range;
+    return { x: level.fish.x + dx, y: level.fish.y };
+  }, [level, t]);
+
+  const eye = level.eye;
+  const { x:appX, y:appY, P } = useMemo(() => computeApparent(eye, fish), [eye, fish]);
+
+  // 입사각 / 굴절각 계산 (법선=수직)
+  const dxA = eye.x - P.x, dyA = WATER_Y - eye.y;
+  const dxW = fish.x - P.x, dyW = fish.y - WATER_Y;
+  const incAngle = Math.abs(angleDeg(dxA / Math.hypot(dxA, dyA))); // 공기쪽(=입사각, 눈→수면)
+  const refAngle = Math.abs(angleDeg(dxW / Math.hypot(dxW, dyW))); // 물쪽(=굴절각)
+
+  const [aim, setAim] = useState(null);   // {x,y} 조준점
+  const [spear, setSpear] = useState(null); // {phase, progress, targetX, targetY}
+  const [result, setResult] = useState(null); // 'hit' | 'miss' | null
+  const [showTruth, setShowTruth] = useState(true); // 실제 위치 보여줄지
+
+  // 레벨 바뀌면 초기화
+  useEffect(() => { setAim(null); setSpear(null); setResult(null); setShowTruth(levelIdx < 2); }, [levelIdx]);
+
+  const svgRef = useRef(null);
+  const handleTap = (e) => {
+    if (spear) return;
+    const svg = svgRef.current;
+    const rect = svg.getBoundingClientRect();
+    const clientX = e.clientX ?? (e.touches && e.touches[0]?.clientX);
+    const clientY = e.clientY ?? (e.touches && e.touches[0]?.clientY);
+    if (clientX==null) return;
+    const x = (clientX - rect.left) / rect.width * VB_W;
+    const y = (clientY - rect.top)  / rect.height * VB_H;
+    if (y < WATER_Y + 5) return; // 물속만 조준 가능
+    setAim({x,y});
+    setResult(null);
+  };
+
+  const fireSpear = () => {
+    if (!aim || spear) return;
+    // 작살은 어부의 손(눈 아래쪽)에서 aim까지 직선.
+    // 명중 판정: aim이 실제 물고기와 tol 안이면 hit
+    const d = Math.hypot(aim.x - fish.x, aim.y - fish.y);
+    const hit = d <= level.tol;
+    let start = performance.now();
+    const total = 700;
+    const tick = (now) => {
+      const p = Math.min(1, (now-start)/total);
+      setSpear({progress:p, aim});
+      if (p < 1) requestAnimationFrame(tick);
+      else {
+        setResult(hit ? 'hit' : 'miss');
+        setShowTruth(true);
+      }
+    };
+    requestAnimationFrame(tick);
+  };
+
+  const reset = () => { setSpear(null); setAim(null); setResult(null); };
+  const next = () => onClear(level.id);
+
+  // 어부(손) 위치: 눈 아래쪽
+  const hand = { x: eye.x + 18, y: eye.y + 40 };
+
+  return (
+    <div className="glass rounded-2xl p-4 md:p-6 fadeInUp">
+      {/* 헤더 */}
+      <div className="flex justify-between items-center mb-3">
+        <button onClick={onBack} className="btn-press text-slate-400 hover:text-white text-sm">← 처음으로</button>
+        <div className="text-xs md:text-sm text-slate-300">
+          레벨 <span className="font-bold text-cyan-300">{levelIdx+1}</span> / {totalLevels}
+        </div>
+      </div>
+
+      <h2 className="text-xl md:text-2xl font-bold mb-1 text-cyan-200">{level.title}</h2>
+      <p className="text-slate-300 text-sm mb-3">{level.hint}</p>
+
+      {/* SVG 무대 */}
+      <div className="rounded-xl overflow-hidden border border-slate-700 bg-slate-900 relative select-none">
+        <svg ref={svgRef} viewBox={`0 0 ${VB_W} ${VB_H}`} className="w-full h-auto block cursor-crosshair"
+             onClick={handleTap} onTouchStart={handleTap}>
+          <defs>
+            <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#1e3a8a"/>
+              <stop offset="100%" stopColor="#60a5fa"/>
+            </linearGradient>
+            <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#0891b2"/>
+              <stop offset="100%" stopColor="#083344"/>
+            </linearGradient>
+            <radialGradient id="sun" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#fff8c8"/>
+              <stop offset="100%" stopColor="#fbbf24" stopOpacity="0"/>
+            </radialGradient>
+          </defs>
+
+          {/* 하늘 */}
+          <rect x="0" y="0" width={VB_W} height={WATER_Y} fill="url(#sky)"/>
+          <circle cx="540" cy="60" r="34" fill="url(#sun)"/>
+          <circle cx="540" cy="60" r="16" fill="#fde68a"/>
+
+          {/* 물 */}
+          <rect x="0" y={WATER_Y} width={VB_W} height={VB_H-WATER_Y} fill="url(#water)"/>
+          {/* 바닥 모래 */}
+          <path d={`M0 ${VB_H-20} Q 160 ${VB_H-40} 320 ${VB_H-25} T ${VB_W} ${VB_H-20} L ${VB_W} ${VB_H} L 0 ${VB_H} Z`}
+                fill="#78350f" opacity="0.6"/>
+          <path d={`M0 ${VB_H-20} Q 160 ${VB_H-40} 320 ${VB_H-25} T ${VB_W} ${VB_H-20}`}
+                fill="none" stroke="#fbbf24" strokeWidth="2" opacity="0.6"/>
+
+          {/* 수면 파도 */}
+          <g className="wave">
+            <path d={`M-40 ${WATER_Y} q 10 -6 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0 t 20 0`}
+                  fill="none" stroke="#a5f3fc" strokeWidth="2" opacity="0.6"/>
+          </g>
+          <line x1="0" y1={WATER_Y} x2={VB_W} y2={WATER_Y} stroke="#a5f3fc" strokeWidth="1" opacity="0.3"/>
+
+          {/* 법선 (굴절점에서 수직선, 점선) */}
+          <line x1={P.x} y1={WATER_Y-60} x2={P.x} y2={WATER_Y+60}
+                stroke="#fbbf24" strokeWidth="1.2" strokeDasharray="4 4" opacity="0.7"/>
+          <text x={P.x+6} y={WATER_Y-48} fontSize="10" fill="#fde68a">법선</text>
+
+          {/* 빛의 경로: 물고기 → P → 눈 (실제 빛) */}
+          <line x1={fish.x} y1={fish.y} x2={P.x} y2={WATER_Y}
+                stroke="#fde047" strokeWidth="2" opacity="0.95"/>
+          <line x1={P.x} y1={WATER_Y} x2={eye.x} y2={eye.y}
+                stroke="#fde047" strokeWidth="2" opacity="0.95"/>
+          {/* 화살표 머리 — 눈 방향 */}
+          <polygon points={`${eye.x},${eye.y} ${eye.x+8},${eye.y+6} ${eye.x+3},${eye.y+9}`} fill="#fde047"/>
+
+          {/* 눈이 인식한 직선(겉보기): 눈 → P → 겉보기 물고기 (점선 연장) */}
+          <line x1={P.x} y1={WATER_Y} x2={appX} y2={appY}
+                stroke="#fef08a" strokeWidth="1.5" strokeDasharray="5 4" opacity="0.8"/>
+
+          {/* 각도 표시 호 */}
+          <AngleArc cx={P.x} cy={WATER_Y} from={{x:eye.x, y:eye.y}} label={`입사각 ${incAngle.toFixed(0)}°`} color="#fde68a" up={true}/>
+          <AngleArc cx={P.x} cy={WATER_Y} from={{x:fish.x, y:fish.y}} label={`굴절각 ${refAngle.toFixed(0)}°`} color="#67e8f9" up={false}/>
+
+          {/* 겉보기 물고기 (밝고 반투명) */}
+          <g transform={`translate(${appX},${appY})`} className="fish-swim">
+            <Fish scale={1} opacity={0.9} ghost={false} color="#fde68a"/>
+            <circle r="22" fill="none" stroke="#fde68a" strokeWidth="1.5" opacity="0.5" className="pulseRing"/>
+            <text x="0" y="34" textAnchor="middle" fontSize="10" fill="#fde68a" fontWeight="700">보이는 위치</text>
+          </g>
+
+          {/* 실제 물고기 */}
+          {showTruth && (
+            <g transform={`translate(${fish.x},${fish.y})`} className="fish-swim">
+              <Fish scale={1} opacity={1} ghost={false} color="#22d3ee"/>
+              <text x="0" y="34" textAnchor="middle" fontSize="10" fill="#67e8f9" fontWeight="700">실제 위치</text>
+            </g>
+          )}
+          {!showTruth && (
+            <g transform={`translate(${fish.x},${fish.y})`} opacity="0.25">
+              <Fish scale={1} opacity={0.3} ghost={true} color="#22d3ee"/>
+            </g>
+          )}
+
+          {/* 어부 */}
+          <Fisherman eye={eye} hand={hand}/>
+
+          {/* 조준선 */}
+          {aim && !spear && (
+            <>
+              <line x1={hand.x} y1={hand.y} x2={aim.x} y2={aim.y}
+                    stroke="#f87171" strokeWidth="1.5" strokeDasharray="4 3" opacity="0.9"/>
+              <circle cx={aim.x} cy={aim.y} r="6" fill="none" stroke="#f87171" strokeWidth="2"/>
+              <circle cx={aim.x} cy={aim.y} r="2" fill="#f87171"/>
+            </>
+          )}
+
+          {/* 날아가는 작살 */}
+          {spear && (
+            <SpearAnim hand={hand} aim={spear.aim} progress={spear.progress}/>
+          )}
+
+          {/* 결과 */}
+          {result==='hit' && (
+            <g transform={`translate(${fish.x},${fish.y-50})`}>
+              <rect x="-38" y="-16" width="76" height="26" rx="6" fill="#10b981"/>
+              <text x="0" y="2" textAnchor="middle" fontSize="14" fontWeight="800" fill="#fff">명중! 🎯</text>
+            </g>
+          )}
+          {result==='miss' && (
+            <g transform={`translate(${aim.x},${aim.y-30})`}>
+              <rect x="-42" y="-16" width="84" height="26" rx="6" fill="#ef4444"/>
+              <text x="0" y="2" textAnchor="middle" fontSize="13" fontWeight="800" fill="#fff">빗나감 💨</text>
+            </g>
+          )}
+        </svg>
+      </div>
+
+      {/* 수치 패널 */}
+      <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+        <Stat label="입사각(공기)" value={`${incAngle.toFixed(1)}°`} color="text-yellow-300"/>
+        <Stat label="굴절각(물속)" value={`${refAngle.toFixed(1)}°`} color="text-cyan-300"/>
+        <Stat label="겉보기 깊이" value={`${(appY-WATER_Y).toFixed(0)} px`} color="text-yellow-200"/>
+        <Stat label="실제 깊이" value={`${(fish.y-WATER_Y).toFixed(0)} px`} color="text-cyan-200"/>
+      </div>
+
+      {/* 컨트롤 */}
+      <div className="mt-4 flex flex-wrap gap-2 items-center">
+        <button onClick={fireSpear} disabled={!aim || !!spear}
+          className="btn-press flex-1 min-w-[140px] py-3 rounded-lg font-bold text-white
+                     bg-gradient-to-r from-rose-500 to-red-600 disabled:from-slate-600 disabled:to-slate-700
+                     disabled:text-slate-400 shadow-lg shadow-rose-900/40">
+          🎯 작살 던지기
+        </button>
+        <button onClick={reset}
+          className="btn-press px-4 py-3 rounded-lg font-semibold bg-slate-700 hover:bg-slate-600 text-sm">
+          ↺ 다시
+        </button>
+        <button onClick={()=>setShowTruth(s=>!s)}
+          className="btn-press px-4 py-3 rounded-lg font-semibold bg-slate-700 hover:bg-slate-600 text-sm">
+          {showTruth ? "🙈 실제 위치 숨기기" : "👁 실제 위치 보기"}
+        </button>
+        {result==='hit' && (
+          <button onClick={next}
+            className="btn-press px-6 py-3 rounded-lg font-bold text-white
+                       bg-gradient-to-r from-emerald-500 to-cyan-600">
+            {levelIdx+1 < totalLevels ? "다음 레벨 →" : "퀴즈 풀기 →"}
+          </button>
+        )}
+      </div>
+
+      {result==='miss' && (
+        <div className="mt-3 p-3 rounded-lg bg-rose-900/30 border border-rose-700/50 text-sm text-rose-100">
+          💡 보이는 위치는 실제보다 <strong>얕은 곳(위쪽)</strong>이에요. 조준점을 실제 물고기의 위치로 내려보세요!
+        </div>
+      )}
+      {result==='hit' && (
+        <div className="mt-3 p-3 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-sm text-emerald-100">
+          ✨ 훌륭해요! 겉보기 위치보다 <strong>더 아래</strong>를 맞춘 거예요. 이것이 굴절 때문에 생기는 착시입니다.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* 각도 호 표시 */
+function AngleArc({cx, cy, from, label, color, up}) {
+  const dx = from.x - cx, dy = from.y - cy;
+  const len = Math.hypot(dx, dy);
+  const r = 28;
+  // 법선(수직)과 from 방향 사이의 호
+  const nx = 0, ny = up ? -1 : 1; // 법선 방향
+  const fx = dx/len, fy = dy/len; // from 쪽 방향
+  // 시작점 = cx + r*nx, cy + r*ny
+  const sx = cx + r*nx, sy = cy + r*ny;
+  const ex = cx + r*fx, ey = cy + r*fy;
+  // 어느 쪽으로 굽을지 결정 (sweep)
+  const sweep = (fx > 0) ? (up ? 1 : 0) : (up ? 0 : 1);
+  return (
+    <g>
+      <path d={`M ${sx} ${sy} A ${r} ${r} 0 0 ${sweep} ${ex} ${ey}`}
+            fill="none" stroke={color} strokeWidth="1.5" opacity="0.85"/>
+      <text x={cx + (fx+nx)*20} y={cy + (fy+ny)*20 + (up?-2:10)}
+            fontSize="10" fill={color} fontWeight="700" textAnchor={fx>0?"start":"end"}>
+        {label}
+      </text>
+    </g>
+  );
+}
+
+/* 물고기 SVG */
+function Fish({scale=1, opacity=1, ghost=false, color="#22d3ee"}) {
+  return (
+    <g opacity={opacity} transform={`scale(${scale})`}>
+      <ellipse cx="0" cy="0" rx="18" ry="9" fill={color} stroke={ghost?"#67e8f9":"#0e7490"} strokeWidth={ghost?1.5:1.2} strokeDasharray={ghost?"3 3":"0"}/>
+      <polygon points="16,0 26,-8 26,8" fill={color} stroke={ghost?"#67e8f9":"#0e7490"} strokeWidth={ghost?1.5:1.2} strokeDasharray={ghost?"3 3":"0"}/>
+      <circle cx="-10" cy="-2" r="2" fill="#0f172a"/>
+      <path d="M -12 3 Q -8 6 -4 3" fill="none" stroke="#0f172a" strokeWidth="0.8"/>
+    </g>
+  );
+}
+
+/* 어부 */
+function Fisherman({eye, hand}) {
+  return (
+    <g>
+      {/* 보트 */}
+      <path d={`M ${eye.x-60} ${WATER_Y-2} Q ${eye.x} ${WATER_Y+18} ${eye.x+60} ${WATER_Y-2} L ${eye.x+50} ${WATER_Y-8} L ${eye.x-50} ${WATER_Y-8} Z`}
+            fill="#7c2d12" stroke="#431407" strokeWidth="1.5"/>
+      <rect x={eye.x-2} y={eye.y+5} width="4" height={WATER_Y-eye.y-13} fill="#431407"/>
+      {/* 몸통 */}
+      <ellipse cx={eye.x} cy={eye.y+25} rx="14" ry="18" fill="#0369a1"/>
+      {/* 머리 */}
+      <circle cx={eye.x} cy={eye.y+3} r="11" fill="#fcd34d"/>
+      {/* 눈 */}
+      <circle cx={eye.x+3} cy={eye.y+2} r="2" fill="#0f172a"/>
+      <circle cx={eye.x+3.5} cy={eye.y+1.5} r="0.6" fill="#fff"/>
+      {/* 모자 */}
+      <path d={`M ${eye.x-13} ${eye.y-6} Q ${eye.x} ${eye.y-18} ${eye.x+13} ${eye.y-6} Z`} fill="#b91c1c"/>
+      <rect x={eye.x-15} y={eye.y-7} width="30" height="3" fill="#b91c1c"/>
+      {/* 팔 (손까지) */}
+      <line x1={eye.x+8} y1={eye.y+18} x2={hand.x} y2={hand.y} stroke="#fcd34d" strokeWidth="5" strokeLinecap="round"/>
+      {/* 손 */}
+      <circle cx={hand.x} cy={hand.y} r="3.5" fill="#f59e0b"/>
+      {/* 라벨 */}
+      <text x={eye.x} y={eye.y-22} textAnchor="middle" fontSize="9" fill="#fde68a" fontWeight="700">관찰자(눈)</text>
+    </g>
+  );
+}
+
+/* 작살 애니메이션 */
+function SpearAnim({hand, aim, progress}) {
+  const x = hand.x + (aim.x - hand.x) * progress;
+  const y = hand.y + (aim.y - hand.y) * progress;
+  const angle = Math.atan2(aim.y - hand.y, aim.x - hand.x) * 180/Math.PI;
+  return (
+    <g transform={`translate(${x},${y}) rotate(${angle})`}>
+      <line x1="-24" y1="0" x2="14" y2="0" stroke="#cbd5e1" strokeWidth="2.5" strokeLinecap="round"/>
+      <polygon points="14,0 4,-5 4,5" fill="#e2e8f0" stroke="#64748b" strokeWidth="0.8"/>
+      <polygon points="2,-4 -2,0 2,4" fill="#94a3b8"/>
+    </g>
+  );
+}
+
+/* 작은 수치 박스 */
+function Stat({label, value, color}) {
+  return (
+    <div className="bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2">
+      <div className="text-slate-400 text-[10px]">{label}</div>
+      <div className={`font-bold text-base ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+/* ───── 퀴즈 ───── */
+function QuizScreen({idx, total, item, onAnswer}) {
+  const [picked, setPicked] = useState(null);
+  useEffect(() => setPicked(null), [idx]);
+  const choose = (v) => {
+    setPicked(v);
+    setTimeout(()=>onAnswer(v), 600);
+  };
+  return (
+    <div className="glass rounded-2xl p-6 md:p-8 fadeInUp">
+      <div className="text-sm text-slate-400 mb-1">OX 퀴즈 · {idx+1}/{total}</div>
+      <h2 className="text-xl md:text-2xl font-bold mb-6 text-cyan-200">문제 {idx+1}</h2>
+      <p className="text-lg md:text-xl font-semibold mb-8 text-slate-100 leading-relaxed">{item.q}</p>
+      <div className="grid grid-cols-2 gap-4">
+        <button onClick={()=>choose('O')} disabled={picked!==null}
+          className={`btn-press py-6 rounded-xl text-4xl font-black
+            ${picked==='O' ? (item.a==='O'?'bg-emerald-500':'bg-rose-500') : 'bg-slate-700 hover:bg-slate-600'}
+            disabled:opacity-80`}>O</button>
+        <button onClick={()=>choose('X')} disabled={picked!==null}
+          className={`btn-press py-6 rounded-xl text-4xl font-black
+            ${picked==='X' ? (item.a==='X'?'bg-emerald-500':'bg-rose-500') : 'bg-slate-700 hover:bg-slate-600'}
+            disabled:opacity-80`}>X</button>
+      </div>
+      {picked && (
+        <div className={`mt-6 p-4 rounded-lg text-sm fadeInUp
+          ${picked===item.a ? 'bg-emerald-900/40 border border-emerald-700/50' : 'bg-rose-900/40 border border-rose-700/50'}`}>
+          {picked===item.a ? "✅ 정답!" : `❌ 오답! 정답은 ${item.a}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───── 엔드 화면 ───── */
+function EndScreen({score, total, answers, onRestart}) {
+  const pct = Math.round(score/total*100);
+  return (
+    <div className="glass rounded-2xl p-6 md:p-10 text-center fadeInUp">
+      <h1 className="text-3xl md:text-4xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-sky-500">
+        🎓 실험 완료!
+      </h1>
+      <p className="text-slate-300 mb-6">빛의 굴절로 생기는 착시를 정복했어요.</p>
+
+      <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 mb-6">
+        <div className="text-sm text-slate-400 mb-1">퀴즈 점수</div>
+        <div className="text-5xl font-black text-cyan-300">{score} <span className="text-2xl text-slate-400">/ {total}</span></div>
+        <div className="text-sm text-slate-400 mt-1">정답률 {pct}%</div>
+      </div>
+
+      <div className="text-left space-y-2 text-sm text-slate-200 bg-slate-800/40 rounded-xl p-4 border border-slate-700 mb-6">
+        <p className="font-bold text-cyan-300 mb-2">📘 오늘 배운 것</p>
+        <p>· <strong>굴절</strong>: 빛이 다른 매질로 들어갈 때 경계면에서 진행 방향이 꺾이는 현상</p>
+        <p>· 공기→물로 들어갈 때 빛은 <strong>법선 쪽으로</strong> 꺾인다 → 물속 물체는 <strong>더 얕은 곳</strong>에 있는 것처럼 보임</p>
+        <p>· <strong>입사각이 커질수록 굴절각도 커진다</strong> (비스듬히 볼수록 착시가 심해짐)</p>
+        <p>· 작살(물체)은 빛과 달리 꺾이지 않으므로, 보이는 위치가 아니라 <strong>실제 위치</strong>를 조준해야 한다</p>
+      </div>
+
+      <button onClick={onRestart}
+        className="btn-press w-full md:w-auto px-10 py-4 rounded-xl font-bold text-lg
+                   bg-gradient-to-r from-cyan-500 to-sky-600">
+        🔄 처음부터 다시
+      </button>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
 </body>
 </html>
